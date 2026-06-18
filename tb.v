@@ -1,0 +1,168 @@
+`timescale 1ns/1ps
+module testbench_pipeline;
+
+	reg clk, rst; 
+	reg [4:0] rs1, rs2, rd;
+	reg [3:0] instrn;
+
+	integer k;
+	integer pass_count = 0;
+	integer total_count = 0;
+	
+	main MYPIPE(.clk(clk), .rst(rst), .rs1(rs1), .rs2(rs2), .rd(rd), .instrn(instrn));
+
+
+	task drive_instruction;
+		input [4:0] i_rs1;
+		input [4:0] i_rs2;
+		input [4:0] i_rd;
+		input [3:0] i_instrn;
+		begin
+			rs1 = i_rs1;
+			rs2 = i_rs2;
+			rd = i_rd;
+			instrn = i_instrn;
+			@(negedge clk);
+		end
+	endtask
+
+	task flush_pipeline;
+		begin
+			rs1 = 5'd0;
+			rs2 = 5'd0;
+			rd = 5'd0;
+			instrn = 4'b0000;
+			@(negedge clk);
+		end
+	endtask
+
+	task check_result;
+		input [4:0] reg_addr;
+		input [31:0] expected_val;
+		input [8*25:1] test_name; // 25-character string name
+		begin
+			total_count = total_count + 1;
+			// === uses strict equality to catch 'X' or 'Z' states
+			if (MYPIPE.register_bank[reg_addr] === expected_val) begin
+				$display("[PASS] %s | Reg[%0d] = %0d", test_name, reg_addr, $signed(expected_val));
+				pass_count = pass_count + 1;
+			end else begin
+				$display("[FAIL] %s | Reg[%0d] Expected: %0d, Got: %0d", 
+				         test_name, reg_addr, $signed(expected_val), $signed(MYPIPE.register_bank[reg_addr]));
+			end
+		end
+	endtask
+
+	initial begin 
+		clk = 1'b0;
+		rst = 1'b1;
+		rs1 = 5'd0; rs2 = 5'd0; rd = 5'd0;
+		instrn = 4'b0000;		
+
+		for(k=0; k<32; k=k+1) begin 
+			MYPIPE.register_bank[k] = k; 
+		end 
+		
+		// Custom Test Values
+		MYPIPE.register_bank[5] = 32'hFFFFFFFF;
+		MYPIPE.register_bank[6] = 35;
+		MYPIPE.register_bank[8] = 32'h7FFFFFFF; 
+		MYPIPE.register_bank[9] = 1;
+		
+		#10 rst = 1'b0;
+	end
+	
+	always #5 clk = ~clk;
+
+	initial begin
+		// Wait for the reset to drop, then wait for the first negative edge
+		@(negedge rst);
+		@(negedge clk); 
+		
+		// TEST 1: Basic ADD (r1 = 2 + 3 = 5)
+		drive_instruction(5'd2, 5'd3, 5'd1, 4'b0000);
+		
+		// TEST 2: Shift Masking (r4 = FFFFFFFF << 3 = -8)
+		drive_instruction(5'd5, 5'd6, 5'd4, 4'b0110);
+		
+		// TEST 3: Signed Math & Overflow (r7 = 7FFFFFFF + 1 = Max Negative)
+		drive_instruction(5'd8, 5'd9, 5'd7, 4'b0000);
+		
+		flush_pipeline();
+		
+		// TEST 4: Classic Hazard - Operand A (r11 = 5 - 12 = -7)
+		drive_instruction(5'd2, 5'd3, 5'd10, 4'b0000);  
+		drive_instruction(5'd10, 5'd12, 5'd11, 4'b0001); 
+		
+		flush_pipeline(); 
+
+		// TEST 5: Double Hazard - Operands A & B (r14 = 5 ^ 5 = 0)
+		drive_instruction(5'd2, 5'd3, 5'd13, 4'b0000);   
+		drive_instruction(5'd13, 5'd13, 5'd14, 4'b0100); 
+		
+		flush_pipeline(); 
+		
+		// TEST 6: False Alarm Hazard (r16 = 17 - 18 = -1)
+		drive_instruction(5'd2, 5'd3, 5'd15, 4'b0000); 
+		drive_instruction(5'd17, 5'd18, 5'd16, 4'b0001); 
+
+		flush_pipeline(); 
+
+		// TEST 7: Writing into register-0 
+		drive_instruction(5'd20, 5'd21, 5'd0, 4'b0000);  
+		drive_instruction(5'd0, 5'd23, 5'd22, 4'b0001);  
+
+		flush_pipeline(); 
+		
+		// TEST 8: Distance-2 Hazard (r27 = 51 - 28 = 23)
+		drive_instruction(5'd25, 5'd26, 5'd24, 4'b0000
+		flush_pipeline();                                
+		drive_instruction(5'd24, 5'd28, 5'd27, 4'b0001); 
+
+		
+		flush_pipeline(); 
+		flush_pipeline(); 
+		#50;
+
+		
+		// AUTOMATED VERIFICATION REPORT
+		$display("\n=======================================================");
+		$display("          FINAL ARCHITECTURAL STATE REPORT             ");
+		$display("=======================================================");
+		
+		check_result(5'd1,   5,            "Test 1: Basic ADD        ");
+		check_result(5'd4,  -8,            "Test 2: Shift Masking    ");
+		check_result(5'd7,   32'h80000000, "Test 3: Signed Overflow  "); // Max negative
+		check_result(5'd11, -7,            "Test 4: Classic RAW      ");
+		check_result(5'd14,  0,            "Test 5: Double Hazard    ");
+		check_result(5'd16, -1,            "Test 6: False Hazard     ");
+		check_result(5'd0,   0,            "Test 7: Reg[0] Trap Lock "); // Should stay 0
+		check_result(5'd22, -23,           "Test 7: Reg[0] Math Check");
+		check_result(5'd27,  23,           "Test 8: Distance-2 Hazard");
+		
+
+		if (pass_count == total_count) begin
+			$display("  -> STATUS: CPU VERIFICATION SUCCESSFUL (%0d/%0d) ", pass_count, total_count);
+		end else begin
+			$display("  -> STATUS: CPU VERIFICATION FAILED (%0d/%0d passed)", pass_count, total_count);
+		end
+		$finish;
+	end
+
+	always @(posedge clk) begin
+		#3; 
+		if (MYPIPE.OP_WR_rd != 5'd0 && !rst) begin 
+			$display("Time=%0t | Stage 3 Write: Reg[%0d] = %0d | Flags [S,Z,C,OvA,OvS]: %b", 
+			         $time, MYPIPE.OP_WR_rd, $signed(MYPIPE.OP_WR_ALUout), MYPIPE.OP_WR_flag_register);
+		end
+		else if (MYPIPE.OP_WR_rd == 5'd0 && MYPIPE.OP_WR_ALUout != 0 && !rst) begin
+			$display("Time=%0t | [HARDWARE TRAP] Blocked attempt to write %0d into Reg[0]!", 
+                     $time, $signed(MYPIPE.OP_WR_ALUout));
+		end
+	end
+	
+	initial begin
+		$dumpfile("alu.vcd");
+		$dumpvars(0, alu_tb); 
+	end
+endmodule
