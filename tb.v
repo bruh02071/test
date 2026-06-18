@@ -11,7 +11,6 @@ module testbench_pipeline;
 	
 	main MYPIPE(.clk(clk), .rst(rst), .rs1(rs1), .rs2(rs2), .rd(rd), .instrn(instrn));
 
-
 	task drive_instruction;
 		input [4:0] i_rs1;
 		input [4:0] i_rs2;
@@ -42,7 +41,6 @@ module testbench_pipeline;
 		input [8*25:1] test_name; // 25-character string name
 		begin
 			total_count = total_count + 1;
-			// === uses strict equality to catch 'X' or 'Z' states
 			if (MYPIPE.register_bank[reg_addr] === expected_val) begin
 				$display("[PASS] %s | Reg[%0d] = %0d", test_name, reg_addr, $signed(expected_val));
 				pass_count = pass_count + 1;
@@ -75,7 +73,6 @@ module testbench_pipeline;
 	always #5 clk = ~clk;
 
 	initial begin
-		// Wait for the reset to drop, then wait for the first negative edge
 		@(negedge rst);
 		@(negedge clk); 
 		
@@ -90,13 +87,13 @@ module testbench_pipeline;
 		
 		flush_pipeline();
 		
-		// TEST 4: Classic Hazard - Operand A (r11 = 5 - 12 = -7)
+		// TEST 4: Read after Write Hazard 
 		drive_instruction(5'd2, 5'd3, 5'd10, 4'b0000);  
 		drive_instruction(5'd10, 5'd12, 5'd11, 4'b0001); 
 		
 		flush_pipeline(); 
 
-		// TEST 5: Double Hazard - Operands A & B (r14 = 5 ^ 5 = 0)
+		// TEST 5: Double Hazard 
 		drive_instruction(5'd2, 5'd3, 5'd13, 4'b0000);   
 		drive_instruction(5'd13, 5'd13, 5'd14, 4'b0100); 
 		
@@ -124,12 +121,7 @@ module testbench_pipeline;
 		flush_pipeline(); 
 		#50;
 
-		
-		// AUTOMATED VERIFICATION REPORT
-		$display("\n=======================================================");
-		$display("          FINAL ARCHITECTURAL STATE REPORT             ");
-		$display("=======================================================");
-		
+		$display("Results: ");
 		check_result(5'd1,   5,            "Test 1: Basic ADD        ");
 		check_result(5'd4,  -8,            "Test 2: Shift Masking    ");
 		check_result(5'd7,   32'h80000000, "Test 3: Signed Overflow  "); // Max negative
@@ -142,9 +134,9 @@ module testbench_pipeline;
 		
 
 		if (pass_count == total_count) begin
-			$display("  -> STATUS: CPU VERIFICATION SUCCESSFUL (%0d/%0d) ", pass_count, total_count);
+			$display("  -> STATUS: ALL TESTS SUCCESSFUL (%0d/%0d) ", pass_count, total_count);
 		end else begin
-			$display("  -> STATUS: CPU VERIFICATION FAILED (%0d/%0d passed)", pass_count, total_count);
+			$display("  -> STATUS: ALL TESTS NOT SUCCESSFUL (%0d/%0d passed)", pass_count, total_count);
 		end
 		$finish;
 	end
